@@ -1,6 +1,9 @@
+
 import { DBArticle } from "../types";
 
 const API_BASE = '/api';
+
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export const analysisService = {
 
@@ -15,12 +18,26 @@ export const analysisService = {
   triggerPipeline: async (): Promise<{ success: boolean, message: string }> => {
     try {
       console.log("Triggering Backend ML Pipeline...");
-      const response = await fetch(`${API_BASE}/pipeline/process`, {
-        method: 'POST',
-      });
+      
+      let response;
+      // Retry loop for the pipeline trigger, as it is the most critical step
+      for(let i=0; i<3; i++) {
+        try {
+            response = await fetch(`${API_BASE}/pipeline/process`, {
+                method: 'POST',
+            });
+            if(response.ok) break;
+            if(response.status >= 500) throw new Error("Server warming up...");
+        } catch(e) {
+            if (i < 2) {
+                console.log(`Pipeline trigger attempt ${i+1} failed. Retrying in 2s...`);
+                await wait(2000);
+            }
+        }
+      }
 
-      if (!response.ok) {
-        throw new Error('Backend pipeline failed');
+      if (!response || !response.ok) {
+        throw new Error('Backend pipeline failed after retries');
       }
 
       const result = await response.json();

@@ -1,3 +1,4 @@
+
 import { RSS_FEEDS, KNOWN_SOURCES } from '../constants';
 import { DBArticle, BiasRating, Factuality } from '../types';
 import { dbService } from './dbService';
@@ -43,26 +44,37 @@ const mapSourceToMetadata = (sourceName: string, link: string): { bias: BiasRati
 
 // Strategy 0: Fetch via Local Backend Proxy (Most reliable)
 async function fetchWithLocalProxy(targetUrl: string): Promise<string | null> {
-    try {
-        // Simple timeout to prevent hanging forever
+    const fetchAttempt = async () => {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-        // This hits the server endpoint we just added in index.js
-        const response = await fetch(`/api/proxy?url=${encodeURIComponent(targetUrl)}`, {
-            signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-
-        if (response.ok) {
-            const text = await response.text();
-            if (text.includes('<rss') || text.includes('<feed') || text.startsWith('<?xml')) {
-                return text;
+        const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout
+        try {
+            const response = await fetch(`/api/proxy?url=${encodeURIComponent(targetUrl)}`, {
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+            if (response.ok) {
+                const text = await response.text();
+                if (text.includes('<rss') || text.includes('<feed') || text.startsWith('<?xml')) {
+                    return text;
+                }
             }
+        } catch(e) {
+            clearTimeout(timeoutId);
+            throw e;
         }
+        return null;
+    };
+
+    try {
+        return await fetchAttempt();
     } catch (e) {
-        // Silent fail, try next strategy (Public Proxies)
-        // This is normal during startup if the backend isn't ready yet
+        // If the backend is waking up, retry once after a short delay
+        await new Promise(r => setTimeout(r, 1000));
+        try {
+            return await fetchAttempt();
+        } catch (e2) {
+             // Silent fail, try next strategy (Public Proxies)
+        }
     }
     return null;
 }
