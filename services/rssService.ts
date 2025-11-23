@@ -44,8 +44,16 @@ const mapSourceToMetadata = (sourceName: string, link: string): { bias: BiasRati
 // Strategy 0: Fetch via Local Backend Proxy (Most reliable)
 async function fetchWithLocalProxy(targetUrl: string): Promise<string | null> {
     try {
+        // Simple timeout to prevent hanging forever
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+
         // This hits the server endpoint we just added in index.js
-        const response = await fetch(`/api/proxy?url=${encodeURIComponent(targetUrl)}`);
+        const response = await fetch(`/api/proxy?url=${encodeURIComponent(targetUrl)}`, {
+            signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
         if (response.ok) {
             const text = await response.text();
             if (text.includes('<rss') || text.includes('<feed') || text.startsWith('<?xml')) {
@@ -53,7 +61,8 @@ async function fetchWithLocalProxy(targetUrl: string): Promise<string | null> {
             }
         }
     } catch (e) {
-        // Silent fail, try next strategy
+        // Silent fail, try next strategy (Public Proxies)
+        // This is normal during startup if the backend isn't ready yet
     }
     return null;
 }
@@ -71,7 +80,7 @@ async function fetchWithXmlProxies(targetUrl: string): Promise<string | null> {
             }
             
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+            const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout
 
             const response = await fetch(fetchUrl, { signal: controller.signal });
             clearTimeout(timeoutId);
@@ -143,7 +152,13 @@ const extractImageFromXml = (item: Element): string | undefined => {
  * Fetches all configured RSS feeds and stores them in the 'news_articles' database table.
  */
 export const ingestRSSFeeds = async (): Promise<void> => {
-  const promises = RSS_FEEDS.map(async (feed) => {
+  // Randomize order to prevent hammering the same proxy simultaneously
+  const shuffledFeeds = [...RSS_FEEDS].sort(() => Math.random() - 0.5);
+
+  const promises = shuffledFeeds.map(async (feed, index) => {
+    // Stagger requests slightly to reduce network congestion/race conditions
+    await new Promise(resolve => setTimeout(resolve, index * 200));
+
     try {
       let dbArticles: DBArticle[] = [];
       
